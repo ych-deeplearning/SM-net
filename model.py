@@ -126,7 +126,10 @@ except:
 
 DropPath.__repr__ = lambda self: f"timm.DropPath({self.drop_prob})"
 
-
+"""
+CNN在远程建模能力方面的局限性使它们无法有效地提取图像中的特征，而Transformers则受到其二次计算复杂性的阻碍。最近的研究表明，以Mamba为代表的状态空间模型（SSM）可以在保持线性计算复杂度的同时有效地模拟长程相互作用。
+我们介绍了一个新颖的Conv-SSM模块。Conv-SSM将卷积层的局部特征提取能力与SSM捕获长程依赖性的能力相结合。
+"""
 
 
 def flops_selective_scan_ref(B=1, L=256, D=768, N=16, with_D=True, with_Z=False, with_Group=True, with_complex=False):
@@ -355,7 +358,7 @@ class Final_PatchExpand2D(nn.Module):
 
 
 class SS2D(
-    nn.Module):  
+    nn.Module):  # SS2D（State Space Model 2D）类，它是实现状态空间模型（SSM）在视觉任务中应用的核心部分。这个类将状态空间模型的长程依赖性建模能力与卷积操作结合起来，旨在捕获图像中的长程相互作用，同时保持对局部特征的敏感度。
     def __init__(
             self,
             d_model,
@@ -621,77 +624,6 @@ class Partial_conv3(nn.Module):
 
 
 
-class ConvolutionalBlock(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.in_channels = in_channels
-
-        # DW 卷积
-        self.dw_conv = nn.Conv2d(
-            in_channels=self.in_channels,
-            out_channels=self.in_channels,  # 输出通道数与输入相同
-            kernel_size=3,
-            stride=1,
-            padding=1,  # 使用 padding 保持尺寸
-            groups=self.in_channels  # 组数量等于通道数，实现深度可分离卷积
-        )
-        self.dw_activation = nn.ReLU()
-
-        # 3x3 卷积
-        self.conv3x3 = nn.Conv2d(
-            in_channels=self.in_channels,
-            out_channels=self.in_channels,  # 保持输出通道数与输入通道数相同
-            kernel_size=3,
-            stride=1,
-            padding=1  # 使用 padding 保持尺寸
-        )
-        self.conv3x3_activation = nn.ReLU()
-
-        # 1x1 卷积，用于调整通道数，保证输出通道数与输入通道数相同
-        self.conv1x1 = nn.Conv2d(
-            in_channels=self.in_channels,
-            out_channels=self.in_channels,  # 最终输出通道数与输入通道数相同
-            kernel_size=1,
-            stride=1
-        )
-        self.conv1x1_activation = nn.ReLU()
-
-    def forward(self, x):
-        in_channels = x.size(1)  # 获取输入张量的通道数
-        if in_channels != self.in_channels:
-            # 动态调整卷积层的通道数
-            self.dw_conv = nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=in_channels,  # 输出通道数与输入相同
-                kernel_size=3,
-                stride=1,
-                padding=1,  # 使用 padding 保持尺寸
-                groups=in_channels  # 组数量等于通道数，实现深度可分离卷积
-            )
-            self.conv3x3 = nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=in_channels,  # 保持输出通道数与输入通道数相同
-                kernel_size=3,
-                stride=1,
-                padding=1  # 使用 padding 保持尺寸
-            )
-            self.conv1x1 = nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=in_channels,  # 最终输出通道数与输入通道数相同
-                kernel_size=1,
-                stride=1
-            )
-            self.in_channels = in_channels
-
-        x = self.dw_conv(x)
-        x = self.dw_activation(x)
-        x = self.conv3x3(x)
-        x = self.conv3x3_activation(x)
-        x = self.conv1x1(x)
-        x = self.conv1x1_activation(x)   #shape[4,1024,60,60]
-        return x
-
-
 
 
 class shufflessm(nn.Module):
@@ -709,23 +641,19 @@ class shufflessm(nn.Module):
         self.self_attention = SS2D(d_model=hidden_dim // 2, dropout=attn_drop_rate, d_state=d_state, **kwargs)
         self.drop_path = DropPath(drop_path)
         self.Partial_conv3 = Partial_conv3(32, 20, 'split_cat')
-        self.ConvolutionalBlock = ConvolutionalBlock(in_channels=32)
-        self.conv11 = nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=1, stride=1)
+        self.pwc = nn.Conv2d(in_channels=hidden_dim, out_channels=hidden_dim, kernel_size=1, stride=1)
 
 
     def forward(self, input: torch.Tensor):
         input_left, input_right = input.chunk(2, dim=-1)
         x = input_right + self.drop_path(self.self_attention(self.ln_1(input_right))) #torch.Size([4, 60, 60, 1024])
         x = x.permute(0, 3, 1, 2)
-        x = self.Partial_conv3(x)
         x = channel_shuffle(x, 2)
-        x = self.ConvolutionalBlock(x)
-        x = channel_shuffle(x, 2)
-        #x = x.permute(0, 2, 3, 1)        
         input_left = input_left.permute(0, 3, 1, 2).contiguous()  # Directly forward the left input to the concatenation
-        #x = x.permute(0, 3, 1, 2).contiguous()
+        input_left = self.Partial_conv3(x)
+        input_left = channel_shuffle(x, 2)
         output = torch.cat((input_left, x), dim=1)
-        output = self.conv11(output).permute(0, 2, 3, 1).contiguous()
+        output = self.pwc(output).permute(0, 2, 3, 1).contiguous()
         return output + input
 
 class SMNet(nn.Module):
