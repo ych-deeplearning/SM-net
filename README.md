@@ -1,7 +1,7 @@
 # Enhanced Positional Awareness in Camouflaged Object Segmentation via ShuffleSSM [The Visual Computer 2025]
 
 ## Installation
-pip install torch==1.13.0 torchvision==0.14.0 torchaudio==0.13.0 --extra-index-url https://download.pytorch.org/whl/cu117
+pip install torch==1.13.0 torchvision==0.14.0 torchaudio==0.13.0 --extra-index-url https://download.pytorch.org/whl/cu117\n
 pip install packaging
 pip install timm==0.4.12
 pip install pytest chardet yacs termcolor
